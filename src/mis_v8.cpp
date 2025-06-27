@@ -285,7 +285,7 @@ int branchAndBound(const Graph &g, std::vector<int> &independentSet)
     double density = (2.0 * edges) / (n * (n - 1));
 
     std::vector<int> current;
-    if (density >= 0.6)
+    if (density >= 0.5)
     {
         std::vector<int> R = partial, P = order, X;
         bronKerbosch(g, R, P, X, active, best);

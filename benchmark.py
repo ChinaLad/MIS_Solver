@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # Config
-EXECUTABLE = "mis_v71"
+EXECUTABLE = "mis_v6"
 INPUT = "small"
 GRAPH_TYPE = ["sparse", "normal", "dense"]
 
