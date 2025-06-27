@@ -32,6 +32,7 @@ public:
             adjMatrixComplement[i] = new bool[n];
             std::fill(adjMatrix[i], adjMatrix[i] + n, false);
             std::fill(adjMatrixComplement[i], adjMatrixComplement[i] + n, true);
+            adjMatrixComplement[i][i] = false; // no self-loops in complement
         }
     }
 
