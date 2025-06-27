@@ -1,424 +1,192 @@
-#include <iostream>
-#include <fstream>
-#include <chrono>
-#include <vector>
-#include <math.h>
-#include <algorithm>
-#include <unordered_set>
-#include <bits/stdc++.h>
+ #include <bits/stdc++.h>
+ #pragma GCC optimize("O3,unroll-loops")
+ #pragma GCC target("sse4.2,popcnt")
+ 
+ using namespace std;
+ 
+ static constexpr int MAXN = 2048;     // raise if needed
+ using B = std::bitset<MAXN>;          // handy alias
+ 
+ class Graph {
+ public:
+     int           n;                  // #vertices
+     long long     m = 0;              // #edges
+     vector<B>     adj;                // (original)
+     vector<B>     adjC;               // (complement)
+     vector<int>   deg;                // degree(v)
+ 
+     explicit Graph(int n_)
+         : n(n_), adj(n_), adjC(n_), deg(n_, 0)
+     {
+         if (n > MAXN) throw runtime_error("MAXN too small for this graph");
+         for (int i = 0; i < n; ++i) {
+             adj[i].reset();
+             adjC[i].reset().flip();          // all 1s
+             adjC[i].reset(i);                // remove self-loop
+         }
+     }
+ 
+     static Graph fromFile(const string& file)
+     {
+         ifstream in(file);
+         if (!in) throw runtime_error("cannot open " + file);
+         int N; in >> N;
+         Graph g(N);
+         for (int u, v; in >> u >> v;) g.addEdge(u, v);
+         return g;
+     }
+ 
+     void addEdge(int u, int v)
+     {
+         if (u == v || u < 0 || v < 0 || u >= n || v >= n) return;
+         if (adj[u].test(v)) return;          // already present
+         adj [u].set(v);  adj [v].set(u);
+         adjC[u].reset(v); adjC[v].reset(u);
+         ++deg[u]; ++deg[v]; ++m;
+     }
+ 
+     /* handy row accessors */
+     const B& nbr (int v) const { return adj [v]; }
+     const B& cnbr(int v) const { return adjC[v]; }
+ };
+ 
 
-static inline int popcount64(uint64_t x) { return __builtin_popcountll(x); }
+//Bron–Kerbosch with Tomita pivot  
+ static int choosePivot(const Graph& G, const B& P, const B& X)
+ {
+     B PX = P | X;
+     int bestU = -1, bestCnt = -1;
+     for (int u = PX._Find_first(); u < G.n; u = PX._Find_next(u)) {
+         int c = (P & G.cnbr(u)).count();     // |P ∩ complement(u)|
+         if (c > bestCnt) { bestCnt = c; bestU = u; }
+     }
+     return bestU;
+ }
+ 
+ static void BK_MIS(const Graph& G,
+                    B R, B P, B X,
+                    vector<int>& best)
+ {
+     if (P.none() && X.none()) {              // R is maximal
+         if (R.count() > best.size()) {
+             best.clear();
+             for (int v = R._Find_first(); v < G.n; v = R._Find_next(v))
+                 best.push_back(v);
+         }
+         return;
+     }
+     int u = choosePivot(G, P, X);
+     B ext = P & ~G.cnbr(u);                  // Tomita: P \ complement(u)
+ 
+     for (int v = ext._Find_first(); v < G.n; v = ext._Find_next(v)) {
+         BK_MIS(G,
+                R | B{}.set(v),
+                P & G.cnbr(v),
+                X & G.cnbr(v),
+                best);
+         P.reset(v);
+         X.set(v);
+     }
+ }
+ 
 
-struct Bitset
-{
-    int blocks;           // number of 64-bit blocks
-    const uint64_t *data; // pointer to start
-
-    Bitset(int b = 0, const uint64_t *d = nullptr) : blocks(b), data(d) {}
-
-    // count bits in active ∧ row(u)
-    int intersectionCount(const Bitset &other) const
-    {
-        int cnt = 0;
-        for (int b = 0; b < blocks; ++b)
-            cnt += popcount64(data[b] & other.data[b]);
-        return cnt;
-    }
-};
-
-// 2D static array graph implementation
-class Graph
-{
-private:
-    int n;
-    int m; // number of edges
-    int blocks;
-
-public:
-    std::vector<uint64_t> adjMatrix;
-    std::vector<uint64_t> adjMatrixComplement;
-    int *degrees;
-
-    Graph(int numVertices) : n(numVertices), blocks((numVertices + 63) >> 6), adjMatrix(n * blocks), adjMatrixComplement(n * blocks)
-    {
-        uint64_t allOnes = ~0ULL;
-        for (int i = 0; i < n; ++i)
-        {
-            uint64_t *row = &adjMatrixComplement[i * blocks];
-            for (int b = 0; b < blocks; ++b)
-                adjMatrixComplement[i * blocks + b] = allOnes;
-            // clear self-loop
-            row[i >> 6] &= ~(1ULL << (i & 63));
-            // clear extra bits
-            int extra = (blocks << 6) - n;
-            if (extra)
-            {
-                row[blocks - 1] &= (allOnes >> extra);
-            }
-        }
-    }
-
-    static Graph fromFile(const std::string &fileName)
-    {
-        std::ifstream file(fileName);
-        if (!file)
-            throw std::runtime_error("Cannot open " + fileName);
-        int N;
-        file >> N;
-        Graph g(N);
-        int u, v;
-        while (file >> u >> v)
-            g.addEdge(u, v);
-        return g;
-    }
-
-    int numVertices() const { return n; }
-    int numEdges() const { return m; }
-    int numBlocks() const { return blocks; }
-
-    bool hasEdge(int u, int v) const
-    {
-        return adjMatrix[u * blocks + (v >> 6)] & (1ULL << (v & 63));
-    }
-
-    void addEdge(int u, int v)
-    {
-        if (u != v && u >= 0 && v >= 0 && u < n && v < n)
-        {
-            adjMatrix[u * blocks + (v >> 6)] |= (1ULL << (v & 63));
-            adjMatrix[v * blocks + (u >> 6)] |= (1ULL << (u & 63));
-            adjMatrixComplement[u * blocks + (v >> 6)] &= ~(1ULL << (v & 63));
-            adjMatrixComplement[v * blocks + (u >> 6)] &= ~(1ULL << (u & 63));
-            degrees[u]++;
-            degrees[v]++;
-            m++;
-        }
-    }
-
-    int degree(int u) const
-    {
-        return degrees[u];
-    }
-
-    // direct row-accessor for fast scans
-    const uint64_t *row(int u) const { return &adjMatrix[u * blocks]; }
-
-    Bitset rowBits(int u) const { return Bitset(blocks, (uint64_t *)&adjMatrix[u * blocks]); }
-
-    const uint64_t *complementRow(int u) const { return &adjMatrixComplement[u * blocks]; }
-
-    Bitset compRowBits(int u) const { return Bitset(blocks, (uint64_t *)&adjMatrixComplement[u * blocks]); }
-};
-
-// ALGORITHM (START)
-
-void bronKerbosch(const Graph &g,
-                  const std::vector<int> &R,
-                  const std::vector<int> &P,
-                  const std::vector<int> &X,
-                  const std::vector<bool> &active,
-                  std::vector<int> &best)
-{
-    // get complement matrix
-    if (P.empty() && X.empty())
-    {
-        if (R.size() > best.size())
-            best = R;
-        return;
-    }
-    int pivot = -1, maxCnt = -1, n = g.numVertices(), blocks = g.numBlocks();
-    // pivot select
-    for (int u : P)
-    {
-        if (!active[u])
-            continue;
-
-        int cnt = Bitset(blocks, &g.adjMatrixComplement[u * blocks]).intersectionCount(Bitset(blocks, &g.adjMatrixComplement[0]));
-
-        if (cnt > maxCnt)
-        {
-            maxCnt = cnt;
-            pivot = u;
-        }
-    }
-
-    Bitset pivotMask = (pivot > 0 ? Bitset(blocks, &g.adjMatrixComplement[pivot * blocks]) : Bitset());
-    std::vector<int> ext;
-
-    for (int v : P)
-    {
-        if (!active[v])
-            continue;
-        if (pivot < 0 || !(pivotMask.data[v >> 6] & (1ULL << (v & 63))))
-            ext.push_back(v);
-    }
-    for (int v : ext)
-    {
-        std::vector<int> R2 = R;
-        R2.push_back(v);
-        std::vector<int> P2, X2;
-        Bitset rowCv(blocks, &g.adjMatrixComplement[v * blocks]);
-        for (int w : P)
-            if (active[w] && (rowCv.data[w >> 6] & (1ULL << (w & 63))))
-                P2.push_back(w);
-        for (int w : X)
-            if (active[w] && (rowCv.data[w >> 6] & (1ULL << (w & 63))))
-                X2.push_back(w);
-        bronKerbosch(g, R2, P2, X2, active, best);
-    }
-}
-
-static int greedyColourUB(const Graph &g,
-                          const std::vector<int> &order,
-                          const std::vector<bool> &active)
-{
-    int n = g.numVertices(), blocks = g.numBlocks();
-    std::vector<int> colour(n, -1);
-    std::vector<std::vector<uint64_t>> colMask(64);
-    int used = 0;
-
-    // mask of active vertices as bitsets
-    std::vector<uint64_t> activeMask(blocks);
-    for (int v = 0; v < n; v++)
-    {
-        if (active[v])
-        {
-            activeMask[v >> 6] |= (1ULL << (v & 63));
-        }
-    }
-
-    for (int v : order)
-    {
-        if (!active[v])
-            continue;
-
-        const uint64_t *rowC = g.complementRow(v);
-        int c = 0;
-        for (; c < used; c++)
-        {
-            bool conflict = false;
-            for (int b = 0; b < blocks; b++)
-            {
-                if (rowC[b] & colMask[c][b])
-                {
-                    conflict = true;
-                    break;
-                }
-            }
-            if (!conflict)
-                break;
-        }
-        if (c == used)
-        {
-            colMask.emplace_back(blocks);
-            used++;
-        }
-
-        colMask[c][v >> 6] |= (1ULL << (v & 63));
-    }
-    return used;
-}
-
-// include/exclude recursion
-void branchAndBoundRec(const Graph &g,
-                       const std::vector<int> &order,
-                       std::vector<bool> &active,
-                       std::vector<int> &current,
-                       std::vector<int> &best)
-{
-    int n = g.numVertices(), blocks = g.numBlocks();
-    std::vector<uint64_t> activeMask(blocks);
-    for (int v : order)
-    {
-        if (active[v])
-            activeMask[v >> 6] |= (1ULL << (v & 63));
-    }
-
-    int rem = 0;
-    for (int v : order)
-        if (active[v])
-            ++rem;
-
-    // trivial bound
-    if ((int)current.size() + rem <= (int)best.size())
-        return;
-
-    // colouring bound
-    int ub = greedyColourUB(g, order, active);
-    if ((int)current.size() + ub <= (int)best.size())
-        return;
-
-    // pick v
-    int v = -1;
-    for (int u : order)
-        if (active[u])
-        {
-            v = u;
-            break;
-        }
-    if (v < 0)
-    {
-        if (current.size() > best.size())
-            best = current;
-        return;
-    }
-    // include v
-    std::vector<int> saved;
-    saved.push_back(v);
-    active[v] = false;
-    const uint64_t *rowV = g.row(v);
-    for (int b = 0; b < blocks; b++)
-    {
-        uint64_t bits = rowV[b] & activeMask[b];
-        while (bits)
-        {
-            int u = __builtin_ctzll(bits);
-            active[b * 64 + u] = false;
-            saved.push_back(b * 64 + u);
-            bits &= bits - 1;
-        }
-    }
-    current.push_back(v);
-    branchAndBoundRec(g, order, active, current, best);
-    current.pop_back();
-    for (int u : saved)
-        active[u] = true;
-
-    // exclude v
-    active[v] = false;
-    branchAndBoundRec(g, order, active, current, best);
-    active[v] = true;
-}
-
-void reduceGraph(const Graph &g, std::vector<bool> &active, std::vector<int> &partial)
-{
-    int n = g.numVertices(), blocks = g.numBlocks();
-
-    std::vector<uint64_t> activeMask(blocks);
-    bool changed = true;
-    while (changed)
-    {
-        changed = false;
-        // update activeMask
-        std::fill(activeMask.begin(), activeMask.end(), 0);
-        for (int v = 0; v < n; v++)
-            if (active[v])
-                activeMask[v >> 6] |= 1ULL << (v & 63);
-
-        for (int u = 0; u < n; ++u)
-        {
-            if (!active[u])
-                continue;
-            // degree in O
-            uint64_t *row = (uint64_t *)&g.adjMatrix[u * blocks];
-            int degU = 0;
-            for (int b = 0; b < blocks; b++)
-                degU += popcount64(row[b] & activeMask[b]);
-
-            if (degU == 0)
-            {
-                partial.push_back(u);
-                active[u] = false;
-                changed = true;
-                break;
-            }
-            else if (degU == 1)
-            {
-                // find the one neighbour
-                for (int b = 0; b < blocks; b++)
-                {
-                    uint64_t bits = row[b] & activeMask[b];
-                    if (bits)
-                    {
-                        int v = (b << 6) + __builtin_ctzll(bits);
-                        partial.push_back(u);
-                        active[u] = active[v] = false;
-                        changed = true;
-                        break;
-                    }
-                }
-                if (changed)
-                    break;
-            }
-        }
-    }
-}
-
-int branchAndBound(const Graph &g, std::vector<int> &independentSet)
-{
-    int n = g.numVertices();
-    std::vector<bool> active(n, true);
-    std::vector<int> partial;
-    reduceGraph(g, active, partial);
-
-    std::vector<std::pair<int, int>> deg(n);
-    for (int i = 0; i < n; ++i)
-        deg[i] = {g.degree(i), i};
-
-    // sort vertices by decreasing degree
-    std::sort(deg.begin(), deg.end(), [](auto &a, auto &b)
-              { return a.first > b.first; });
-    std::vector<int> order(n);
-    for (int i = 0; i < n; ++i)
-        order[i] = deg[i].second;
-
-    // greedy initial
-    std::vector<int> best;
-    for (int v : order)
-    {
-        bool ok = true;
-        const uint64_t *row = g.row(v);
-        for (int u : best)
-            if (row[u >> 6] & (1ULL << (u & 63)))
-            {
-                ok = false;
-                break;
-            }
-        if (ok)
-            best.push_back(v);
-    }
-
-    int edges = g.numEdges();
-    double density = (2.0 * edges) / (n * (n - 1));
-
-    if (density >= 0.6)
-    {
-        std::vector<int> R = partial, P = order, X;
-        bronKerbosch(g, R, P, X, active, best);
-    }
-    else
-    {
-        std::vector<int> curr = partial;
-        branchAndBoundRec(g, order, active, curr, best);
-    }
-    independentSet = best;
-    return best.size();
-}
-
-// ALGORITHM (END)
-
-int main(int argc, char *argv[])
-{
-    std::string inputFile = argv[1];
-    free(argv);
-
-    std::unique_ptr<Graph> graph = std::make_unique<Graph>(Graph::fromFile(inputFile));
-
-    std::vector<int> independentSet;
-
-    auto start = std::chrono::high_resolution_clock::now();
-    int size = branchAndBound(*graph, independentSet);
-    auto end = std::chrono::high_resolution_clock::now();
-
-    std::chrono::duration<double> elapsed = end - start;
-
-    std::sort(independentSet.begin(), independentSet.end());
-    std::cout << "MIS size: " << size << "\n";
-    std::cout << "Vertices: ";
-    for (int v : independentSet)
-        std::cout << v << " ";
-    std::cout << "\n";
-    std::cout << "Execution time: " << elapsed.count() << " seconds\n";
-
-    return 0;
-}
+   //Greedy clique-cover bound  (colouring of the complement)
+ static int cliqueCoverUB(const Graph& G, B cand)
+ {
+     int colours = 0;
+     while (cand.any()) {
+         B clique;
+         int v = cand._Find_first();
+         clique.set(v);
+         cand.reset(v);
+ 
+         for (int u = cand._Find_first(); u < G.n; u = cand._Find_next(u)) {
+             /* add u if it is adjacent to EVERY vertex already in clique
+              * ->   no non-edge in the original -> (complement(u) ∩ clique) = ∅ */
+             if ((G.cnbr(u) & clique).none()) {
+                 clique.set(u);
+                 cand.reset(u);
+             }
+         }
+         ++colours;                           // one more clique in the cover
+     }
+     return colours;
+ }
+ 
+ 
+ // Branch-and-Bound (sparse graphs)  –  exact
+ static void BB_MIS(const Graph&  G,
+                    B             cand,
+                    B             chosen,
+                    vector<int>&  best)
+ {
+     /* trivial & clique-cover bounds -------------------------------- */
+     if (chosen.count() + cand.count()            <= best.size()) return;
+     if (chosen.count() + cliqueCoverUB(G, cand)  <= best.size()) return;
+ 
+     /* finished branch ---------------------------------------------- */
+     if (cand.none()) {
+         if (chosen.count() > best.size()) {
+             best.clear();
+             for (int v = chosen._Find_first(); v < G.n; v = chosen._Find_next(v))
+                 best.push_back(v);
+         }
+         return;
+     }
+ 
+     // pick branching vertex = highest degree within cand
+     int v = -1, bestDeg = -1;
+     for (int u = cand._Find_first(); u < G.n; u = cand._Find_next(u)) {
+         int d = (G.nbr(u) & cand).count();
+         if (d > bestDeg) { bestDeg = d; v = u; }
+     }
+ 
+     //include v
+     BB_MIS(G,
+            cand & ~G.nbr(v) & ~B{}.set(v),
+            chosen | B{}.set(v),
+            best);
+ 
+     // exclude v 
+     cand.reset(v);
+     BB_MIS(G, cand, chosen, best);
+ }
+ 
+//top-level driver
+ int maxIndependentSet(const Graph& G, vector<int>& sol)
+ {
+     const double dens = (2.0 * G.m) / (G.n * (G.n - 1)); // edge density
+     B cand; for (int i = 0; i < G.n; ++i) cand.set(i);
+ 
+     vector<int> best;
+     if (dens >= 0.6) {            // dense graph : clique in complement
+         BK_MIS(G, {}, cand, {}, best);
+     } else {                      //sparse graph : B&B
+         BB_MIS(G, cand, {}, best);
+     }
+     sort(best.begin(), best.end());
+     sol.swap(best);
+     return static_cast<int>(sol.size());
+ }
+ 
+ int main(int argc, char* argv[])
+ {
+     if (argc < 2) {
+         cerr << "Usage: " << argv[0] << "  <graph-file>\n";
+         return 1;
+     }
+     Graph G = Graph::fromFile(argv[1]);
+ 
+     vector<int> independentSet;
+     auto t0 = chrono::high_resolution_clock::now();
+     int  size = maxIndependentSet(G, independentSet);
+     auto t1 = chrono::high_resolution_clock::now();
+ 
+     cout << "MIS size: " << size << "\nVertices:";
+     for (int v : independentSet) cout << ' ' << v;
+     cout << "\nExecution time: "
+          << chrono::duration<double>(t1 - t0).count()
+          << " seconds\n";
+     return 0;
+ }
+ 
